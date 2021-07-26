@@ -14,7 +14,7 @@ This is a Pytorch implementation of [PENS](https://www.aclweb.org/anthology/XX.p
 - Download the PENS dataset [here]() and put the dataset under data/.
 - (optional) Download glove.840B.300d.txt under data/ if you choose to use pretrained glove word embeddings.
 
-### 2. Running Code
+## 2. Running Code
 - ```cd pensmodule ```
 - Follow the order: Preprocess --> UserEncoder --> Generator and run the **.ipynb notebook to preprocess, train the user encoder and the train generator, individually.
 
