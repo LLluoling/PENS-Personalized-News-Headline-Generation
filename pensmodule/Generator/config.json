@@ -1,0 +1,27 @@
+
+{
+    "model": {
+        "hidden_dim": 64, 
+        "num_layers_enc": 1,
+        "num_layers_dec": 1,
+        "user_size": 64,
+        "rnn_type_enc": "lstm",
+        "rnn_type_dec": "lstm",
+        "bidirectional_enc": true,
+        "use_bridsge": true,
+        "encoder_type":"lstm",
+        "decoder_type": 1,
+        "if_attention": true,
+        "use_bridge": true
+    },
+    "train":{
+        "teacher_forcing_ratio": 1,
+        "update_frequency": 2,
+        "report_frequency": 200,
+        "save_frequency": 500,
+        "sample_num": 4,
+        "warm_start": false
+    }
+
+
+}
