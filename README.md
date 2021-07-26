@@ -18,8 +18,5 @@ This is a Pytorch implementation of [PENS](https://www.aclweb.org/anthology/XX.p
 - ```cd pensmodule ```
 - Follow the order: Preprocess --> UserEncoder --> Generator and run the **.ipynb notebook to preprocess, train the user encoder and the train generator, individually.
 
-### 3. Running Code
-- ```cd pensmodule ```
-- Follow the order: Preprocess --> UserEncoder --> Generator and run the **.ipynb notebook to preprocess, train the user encoder and the train generator, individually.
 
 More infor please refer to the homepage of the [introduction of PENS dataset](https://msnews.github.io/pens.html).
