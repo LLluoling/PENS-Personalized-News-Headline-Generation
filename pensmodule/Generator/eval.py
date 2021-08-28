@@ -58,7 +58,7 @@ def predict(usermodel, model, test_iter, device, index2word, beam=True, beam_siz
     scores1 = np.array([score['rouge-1']['f'] for score in scores])
     scores2 = np.array([score['rouge-2']['f'] for score in scores])
     scoresf = np.array([score['rouge-l']['f'] for score in scores])
-    return scores1, scoresf
+    return scores1, scores2, scoresf
 
 def load_model_from_ckpt(path):
     checkpoint = torch.load(path)
