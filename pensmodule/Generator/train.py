@@ -453,7 +453,7 @@ class Trainer(nn.Module):
         cover_r1, cover_r2 = ROUGE_Score(self.rouge_evaluator, wd_indexes, news_body_indexes)
         cover_r = (cover_r1 + cover_r2)/2
 
-        all_rewards = personalized_r + fluency_r + cover_r
+        all_rewards = (personalized_r + 2*fluency_r + 7*cover_r)/10
 
         return all_rewards
 
