@@ -32,7 +32,7 @@ Here we take NRMS as user encoder, the followings are some experiment detailes t
 ### 1. Training Reward
 ![image info](./docs/reward.png)
 
-### 2. Test performance on different training epoches
+### 2. Test performance on different training steps
 ![image info](./docs/rouge1.png)
 ![image info](./docs/rouge2.png)
 ![image info](./docs/rougel.png)
