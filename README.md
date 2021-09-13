@@ -26,7 +26,7 @@ Here we take NRMS as user encoder, the followings are some experiment detailes t
 ### 0. TIPS
 - In this paper, we used mento carlo search for RL training, which is very slow in training and sometimes hard to converge. Thus we provide ac training in this provided code.
 - If you pretrain the generator for a couple of epoches, you should set a very small learning rate during RL training.
-- <span style="color:lightblue">Large improvements can be made compared with the baselines that we provided, the importance always lies in the design of reward functions.</span>. 
+- <span style="color:blue">Large improvements can be made compared with the baselines that we provided, the importance always lies in the design of reward functions.</span>. 
 
 
 ### 1. Training Reward
@@ -50,6 +50,6 @@ Here we take NRMS as user encoder, the followings are some experiment detailes t
 
 **Noted:**
 - With the training process goes, the generated sentences are more fluent and contains more rich information.
-- <span style="color:lightblue"> *Rouge scores is not the best evaluation scores, but a compromising choice. Of course the best evaluation is to check out the real clicks of users to see if they are more interested. Thus sometimes a more fluent and human-like generated sentence gets lower rouge scores.*</span>. 
+- <span style="color:blue"> *Rouge scores is not the best evaluation scores, but a compromising choice. Of course the best evaluation is to check out the real clicks of users to see if they are more interested. Thus sometimes a more fluent and human-like generated sentence gets lower rouge scores.*</span>
 
 
