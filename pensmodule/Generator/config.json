@@ -17,9 +17,10 @@
     "train":{
         "teacher_forcing_ratio": 1,
         "update_frequency": 2,
-        "report_frequency": 200,
+        "report_frequency": 500,
         "save_frequency": 500,
-        "sample_num": 4,
+        "sample_num": 16,
+        "type": 1,
         "warm_start": false
     }
 

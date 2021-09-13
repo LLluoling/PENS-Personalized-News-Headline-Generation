@@ -180,15 +180,13 @@ class ValueNetwork(nn.Module):
         self.args = args
         self.hidden_dim = args['hidden_dim'] * 2
         self.relu = nn.ReLU()
-        self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim//2)
-        self.fc3 = nn.Linear(self.hidden_dim//2, 1)
+        self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim//2)
+        self.fc2 = nn.Linear(self.hidden_dim//2, 1)
 
 
     def forward(self, x):
-        out = F.relu(self.fc1(x))
-        out = F.relu(self.fc2(out))
-        out = self.fc3(out)
+        out = self.relu(self.fc1(x))
+        out = self.fc2(out)
         return out
 
 '''

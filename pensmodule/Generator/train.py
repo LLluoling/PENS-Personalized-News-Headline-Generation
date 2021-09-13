@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd 
 import torch.nn as nn
 import torch.optim as optim
-# from torch.nn import utils as nn_utils
 import rouge 
 from collections import OrderedDict
 from torch.distributions import Categorical
@@ -13,20 +12,24 @@ from .model import HeadlineGen
 import torch.nn.functional as F
 from tqdm import tqdm
 import torch
-import sys
+import re
+import pickle
+import math
 import numpy as np
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from tensorboardX import SummaryWriter
 from .modules import ValueNetwork, Memory
-from .util import ROUGE_Score, discount_reward
+from .util import ROUGE_Score, ROUGE_Score_TOP3, discount_reward_update
+from copy import deepcopy
 
 class Trainer(nn.Module):
 
-    def __init__(self, args, model, usermodel, device, experiment_name=None):
+    def __init__(self, args, model, usermodel, device, mode=1, experiment_name=None):
         super(Trainer, self).__init__()
         self.model_args = args['model']
         self.train_args = args['train']
         self.model = model
+        self.mode = mode
         self.usermodel = usermodel
         self.usermodel.eval()
         self.device = device
@@ -59,7 +62,7 @@ class Trainer(nn.Module):
         self.lm_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         self.lm_tokenizer.pad_token = self.lm_tokenizer.eos_token
         
-        self.rouge_evaluator = rouge.Rouge(metrics=['rouge-1', 'rouge-l'])
+        self.rouge_evaluator = rouge.Rouge(metrics=['rouge-1', 'rouge-2', 'rouge-l'])
 
 
     def _init_context_(self, body_path='../../data2/news_body.npy', vert_path='../../data2/news_vert.npy'):
@@ -67,9 +70,14 @@ class Trainer(nn.Module):
         # notice: news body is a string of word indexes
         self.news_body = torch.from_numpy(np.load(body_path)).to(self.device)
         self.news_vert = torch.from_numpy(np.load(vert_path)).to(self.device)
+
         news_body = self.news_body.tolist()
         news_body = [ i[:i.index(0)] if 0 in i else i for i in news_body ]
         self.news_body_indexes = np.array([ ' '.join(map(str, i)) for i in news_body])
+        with open('../../data2/dict.pkl', 'rb') as f:
+            _,_,word_dict = pickle.load(f)
+        regex = ' {} | {} '.format(word_dict[','], word_dict['.'])
+        self.news_body_splits = [re.split(regex, x) for x in self.news_body_indexes]
 
     
     def save_checkpoint(self, tag=None, path=None, mkdir=False, **kwargs):
@@ -108,7 +116,7 @@ class Trainer(nn.Module):
         print('Loaded ' + path)
 
 
-    def pretrain(self, train_iter, global_user_embed):   
+    def pretrain(self, train_iter, global_user_embed, max_step=5000):   
         self.model.train()
         pbar = tqdm(train_iter)        
         losses = []
@@ -135,10 +143,12 @@ class Trainer(nn.Module):
             if (i+1) % self.train_args['report_frequency'] == 0:
                 print("step={:4d}, pretrain loss: {:.3f}".format(i+1, np.mean(losses)))
 
+            if i == max_step:
+                break
+
     
-    def train(self, train_iter, train_option='monte'):
+    def train(self, train_iter, train_option='a2c', tag='a2c', max_train_step=3000):
         self.model.train()
-        # import pdb; pdb.set_trace()
         pbar = tqdm(train_iter)        
         losses, losses2, rewards = [], [], []
         self.step = 1
@@ -151,21 +161,19 @@ class Trainer(nn.Module):
                 src = torch.as_tensor(src, device=self.device).long()
                 tgt_input = torch.as_tensor(tgt_input, device=self.device).long()
                 tgt_output = torch.as_tensor(tgt_output, device=self.device).long()
-                # import pdb; pdb.set_trace()
+
                 with torch.no_grad():
                     user_embeds = self.usermodel.user_encoder(clicked_rep)
                 news_body_indexes = self.news_body_indexes[news_ids]
                 news_body = self.news_body[news_ids]
                 news_vert = self.news_vert[news_ids]
-                encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, states = \
+                encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, wd_str_lists, wd_index_lists, states = \
                                         self.model(src, tgt_input, tgt_output, user_embeds, 0)
 
-                # import pdb; pdb.set_trace()
 
-                reward = self.get_reward(encoder_outputs, decoder_hidden_init, sequences, lengths,\
+                reward = self.get_value(encoder_outputs, decoder_hidden_init, sequences, lengths,\
                                         user_embeds, news_body_indexes, news_body, news_vert, wd_strs, wd_indexes, src)
-                temp_reward = np.sum(reward, axis=1)
-                rewards.append(np.mean(temp_reward/lengths))
+                rewards.append(np.mean([r[lenth-1] for r,lenth in zip(reward,lengths)]))
                 # import pdb; pdb.set_trace()
                 loss = torch.zeros(bz).to(self.device)
                 length_torch = torch.from_numpy(lengths).float().to(self.device)
@@ -174,7 +182,7 @@ class Trainer(nn.Module):
                     for (b, length) in zip(range(bz),lengths): 
                         if step<length:
                             loss[b] += -step_output[b][sequences[b][step]]*reward[b][step] 
-                loss = loss/length_torch
+                # loss = loss/length_torch
                 loss = torch.mean(loss)
                 loss.backward()
                 if (i+1) % self.train_args['update_frequency'] == 0:
@@ -195,6 +203,11 @@ class Trainer(nn.Module):
                 if (i+1) % self.train_args['report_frequency'] == 0:
                     print("step={:4d}, train loss: {:.3f}, train reward: {:.3f}".format(i+1, np.mean(losses[-100:]), np.mean(rewards[-100:])))
 
+                if i == max_train_step:
+                    break
+
+            return rewards 
+
         elif train_option == 'a2c':
             value_net = ValueNetwork(self.model_args).to(self.device)
             value_optimizer = optim.Adam(value_net.parameters(), lr=0.001)
@@ -207,158 +220,69 @@ class Trainer(nn.Module):
                 src = torch.as_tensor(src, device=self.device).long()
                 tgt_input = torch.as_tensor(tgt_input, device=self.device).long()
                 tgt_output = torch.as_tensor(tgt_output, device=self.device).long()
-                # import pdb; pdb.set_trace()
+
                 with torch.no_grad():
                     user_embeds = self.usermodel.user_encoder(clicked_rep)
                 news_body_indexes = self.news_body_indexes[news_ids]
+                news_body_split = [self.news_body_splits[i] for i in news_ids]
                 news_body = self.news_body[news_ids]
                 news_vert = self.news_vert[news_ids]
-                encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, states = \
+                encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, wd_str_lists, wd_index_lists, states = \
                                         self.model(src, tgt_input, tgt_output, user_embeds, 0)
 
-                
-                final_reward = self.get_single_reward(sequences, lengths, wd_strs, wd_indexes, news_body, news_vert, news_body_indexes, user_embeds)
-                all_rewards = np.zeros((bz, 16)).astype(np.float32)
-                masks = torch.zeros((bz, 16)).float().to(self.device)
-                for ind,(temp_r,temp_length) in enumerate(zip(final_reward, lengths)):
-                    all_rewards[ind,temp_length - 1] = temp_r
-                    masks[ind,:temp_length] = 1.0
-                # import pdb; pdb.set_trace()
-                qs = Variable(torch.Tensor(discount_reward(all_rewards)), requires_grad=False).to(self.device) #bz, seq_len, 1
+                all_rewards = self.get_reward(sequences, lengths, wd_strs, wd_indexes, wd_str_lists, wd_index_lists, news_body, news_vert, news_body_indexes, news_body_split, user_embeds) 
+                r = np.mean(np.sum(all_rewards, 1))
+                rewards.append(r)
+                self.writer.add_scalar('reward', r, self.step)
+
                 vs = value_net(states.detach()).squeeze(-1)
+
+                qs = torch.Tensor(discount_reward_update(all_rewards, lengths)).to(self.device) #bz, seq_len, 1
                 advantages = qs - vs.detach()
 
-                
                 self.model.zero_grad()
                 actor_network_loss = torch.zeros(bz).to(self.device)
-                length_torch = torch.from_numpy(lengths).float().to(self.device)
                 for step, step_output in enumerate(decoder_outputs):
                     for b in range(bz):
-                        actor_network_loss[b] += -step_output[b][sequences[b][step]]*advantages[b][step] 
-                
-                actor_network_loss = (actor_network_loss * masks)/length_torch
+                        if step < lengths[b]:
+                            actor_network_loss[b] += -step_output[b][sequences[b][step]]*advantages[b][step] 
                 actor_network_loss = actor_network_loss.mean()
-                # actor_network_loss = - torch.mean(torch.sum(log_softmax_actions*actions_var,1)* advantages)
                 actor_network_loss.backward()
-                torch.nn.utils.clip_grad_norm(self.model.parameters(),0.5)
+
                 self.opt.step()
+
+                loss_item1 = actor_network_loss.detach().cpu().numpy()
+                losses.append(loss_item1)
+                self.writer.add_scalar('actor loss', loss_item1, self.step)
 
                 # train value network
                 value_optimizer.zero_grad()
-                vs = vs * masks
-                value_network_loss = value_criterion(vs,qs)
-                value_network_loss = (value_network_loss/length_torch).mean()
+                value_network_loss = torch.zeros(bz).to(self.device)
+                for b in range(bz):
+                    value_network_loss[b] = value_criterion(vs[b, :lengths[b]], qs[b, :lengths[b]])
+                value_network_loss = value_network_loss.mean() 
                 value_network_loss.backward()
-                torch.nn.utils.clip_grad_norm(value_net.parameters(),0.5)
+                # torch.nn.utils.clip_grad_norm(value_net.parameters(),0.5)
                 value_optimizer.step()
 
                 if (i+1) % self.train_args['save_frequency'] == 0:
-                    self.save_checkpoint(tag='train_a2c_step_'+str(i+1))
+                    self.save_checkpoint(tag='train_'+tag+'_step_'+str(i+1))
                 
-                loss_item1 = actor_network_loss.detach().cpu().numpy()
                 loss_item2 = value_network_loss.detach().cpu().numpy()
-                losses.append(loss_item1)
                 losses2.append(loss_item2)
-                
-                rewards.append(np.mean(np.sum(qs.detach().cpu().numpy(),1)/ lengths))
-
-                self.writer.add_scalar('actor loss', loss_item1, self.step)
                 self.writer.add_scalar('criticc loss', loss_item2, self.step)
-                pbar.set_description("train actor loss: {:.3f}, train critic loss: {:.3f}, \
-                                        train reward: {:.3f}".format(np.mean(losses[-10:]),np.mean(losses2[-10:]),np.mean(rewards[-10:])))
-                if (i+1) % self.train_args['report_frequency'] == 0:
-                    print("step={:4d}, train actor loss: {:.3f}, train critic loss: {:.3f}, \
-                                        train reward: {:.3f}".format(i+1, np.mean(losses[-100:]), np.mean(losses2[-10:]), np.mean(rewards[-100:])))
-   
-
-
-        elif train_option == 'ppo':
-            value_net = ValueNetwork(self.model_args).to(self.device)
-            value_optimizer = optim.Adam(value_net.parameters(), lr=0.0005)
-            memory = Memory(250)
-            count = 0
-            for i, batch in enumerate(pbar):
-                news_ids, clicked_rep, src, tgt_input, tgt_output = batch
-                bz = clicked_rep.shape[0]
                 
-                clicked_rep = torch.as_tensor(clicked_rep, device=self.device)
-                src = torch.as_tensor(src, device=self.device).long()
-                tgt_input = torch.as_tensor(tgt_input, device=self.device).long()
-                tgt_output = torch.as_tensor(tgt_output, device=self.device).long()
-                with torch.no_grad():
-                    user_embeds = self.usermodel.user_encoder(clicked_rep)
-                news_body_indexes = self.news_body_indexes[news_ids]
-                news_body = self.news_body[news_ids]
-                news_vert = self.news_vert[news_ids]
-                self.model.eval()
-                encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, states = \
-                                        self.model(src, tgt_input, tgt_output, user_embeds, 0)
-                reward = self.get_single_reward(sequences, lengths, wd_strs, wd_indexes, news_body, news_vert, news_body_indexes, user_embeds)
-                action = sequences
-                next_states = torch.zeros_like(states).to(self.device)
-                next_states[:,:-1,:] = states[:,1:,:]
-                old_logits = decoder_outputs
-                # Connect experiences from current actor
-                experience = (tgt_input, tgt_output, user_embeds, states, next_states, action, reward, lengths, old_logits)
-                reward_score = np.sum(reward) / len(reward)
-                memory.add((experience, reward_score))
-                if memory.size() >= 100:
-                    batch_seq_loss = 0
-                    batch_value_loss = 0
-                    for K in range(160):
-                        experience, score = memory.sample()
-                        tgt_input, tgt_output, user_embeds, states, next_states, action, reward, lengths, old_logits = experience
-                        reward = torch.FloatTensor(reward).to(self.device)
-                        states = torch.FloatTensor(states).to(self.device)
-                        next_states = torch.FloatTensor(next_states).to(self.device)
-                        value_cur = value_net(states).squeeze(-1) # (B, S)
-                        with torch.no_grad():
-                            # old_logits: S * (B, vocab_dim) --> (B, S, vocab_dim)
-                            old_logits = torch.stack(old_logits, dim=1)
-                            old_logits = old_logits.detach()
-                            value_next = value_net(next_states).squeeze(-1) # (B, S)
-                            for num, length in enumerate(lengths):
-                                value_cur[num, length:] = 0
-                                value_next[num, length-1:] = 0
-                            value_target = reward + value_next # (B, S)
-                            advantage = value_target - value_cur # (B, S)
-                            #advantage = rewards - value_cur # (B, S)
-                        self.model.eval()
-                        _, logits, _, _, _, _, _, _ = \
-                                        self.model(src, tgt_input, tgt_output, user_embeds, 0)
-                        # logits: S * (B, vocab_dim) --> (B, S, vocab_dim)
-                        logits = torch.stack(logits, dim=1)
-                        old_log_prob = torch.gather(old_logits, 2, action.unsqueeze(2)) # (B, S, 1)
-                        log_prob = torch.gather(logits, 2, action.unsqueeze(2)) # (B, S, 1)
+                pbar.set_description("train actor loss: {:.3f}, train critic loss: {:.3f}, train reward: {:.3f}".format(np.mean(losses[-10:]),np.mean(losses2[-10:]),np.mean(rewards[-10:])))
+                if (i+1) % self.train_args['report_frequency'] == 0:
+                    print("step={:4d}, train actor loss: {:.3f}, train critic loss: {:.3f}, train reward: {:.3f}".format(i+1, np.mean(losses[-100:]), np.mean(losses2[-10:]), np.mean(rewards[-100:])))
 
-                        ratio = torch.exp(log_prob - old_log_prob).squeeze(-1) # (B, S)
-                        L1 = ratio * advantage
-                        L2 = torch.clamp(ratio, 0.8, 1.2) * advantage
+                if i == max_train_step:
+                    break
 
-                        loss = torch.min(L1, L2)
-                        loss = -loss.mean()
-                        batch_seq_loss += loss.item()
-                        # update the actor: seq2seq model
-                        # In the first 200 batches, only pretrain value network
-                        if i > 200:
-                            self.opt.zero_grad()
-                            loss.backward()
-                            self.opt.step()
-                        # update value network
-                        value_loss = F.mse_loss(reward, value_cur)
-                        value_optimizer.zero_grad()
-                        value_loss.backward()
-                        value_optimizer.step()
-                        batch_value_loss += value_loss.item() 
-                        self.step += 1
-                        self.writer.add_scalar('train loss', loss.item(), self.step)
-                        self.writer.add_scalar('value loss', value_loss.item(), self.step)
-                    memory.clear()
-                    if (i+1) % self.train_args['report_frequency'] == 0:
-                        print("step={:4d}, avg seq loss: {:.3f}, avg value loss: {:.3f}".format(i+1, batch_seq_loss/160, batch_value_loss/160))
+            return rewards
 
-            
-    def get_reward(self, encoder_outputs, decoder_hidden_init, sequences, lengths,\
+   
+    def get_value(self, encoder_outputs, decoder_hidden_init, sequences, lengths,\
                         user_embeds, news_body_indexes, news_body, news_vert, \
                         wd_strs, wd_indexes, src=None, sos_id=1, eos_id=2):
         
@@ -404,12 +328,15 @@ class Trainer(nn.Module):
                     sample_lengths[update_idx] = len(sample_seq)
                 
                 sample_seq = torch.cat(sample_seq,dim=1) # bz*16
-                sample_wd_strs, sample_wd_indexes = self.model.predict(sample_seq, sample_lengths)
-                temp_rewards = self.get_single_reward(sample_seq, sample_lengths, sample_wd_strs, sample_wd_indexes, news_body, news_vert, news_body_indexes, user_embeds)
+
+                sample_wd_strs, sample_wd_indexes,  _, _= self.model.predict(sample_seq, sample_lengths)
+                temp_rewards = self.get_single_reward(sample_seq, sample_lengths, sample_wd_strs, sample_wd_indexes, \
+                                                        news_body, news_vert, news_body_indexes, user_embeds, sos_id=1, eos_id=2)
 
                 reward[:,i] = temp_rewards
             rewards[:,seq_num] = np.mean(reward, axis=-1)
-        temp_rewards = self.get_single_reward(sequences, lengths, wd_strs, wd_indexes, news_body, news_vert, news_body_indexes, user_embeds)
+        temp_rewards = self.get_single_reward(sequences, lengths, wd_strs, wd_indexes, \
+                                                news_body, news_vert, news_body_indexes, user_embeds, sos_id=1, eos_id=2)
         rewards[:,-1] = temp_rewards
         for ind,length in enumerate(lengths):
             rewards[ind,(length-1)] = rewards[ind,-1]
@@ -417,17 +344,47 @@ class Trainer(nn.Module):
         return rewards
 
 
-    
-    def get_single_reward(self, seqs, sample_lengths, wd_strs, wd_indexes, news_body, news_vert, news_body_indexes, user_embeds):
-        # personalized_r
-        bz = seqs.shape[0]
+    def get_reward(self, sequences, lengths, wd_strs, wd_indexes, wd_str_lists, wd_index_lists, news_body, news_vert, news_body_indexes, news_body_split, user_embeds, sos_id=1, eos_id=2):
+        
+        # sequences (bz, len)
+        bz, len_ = sequences.shape
+        cur_rewards = np.zeros((bz, len_))
+        tmp_seq = deepcopy(sequences)
+        tmp_seq[:,:] = eos_id
+        for i in range(len_):
+            tmp_seq[:, i] = sequences[:, i]
+            tmp_wd_index = [' '.join(x[:i+1]) for x in wd_index_lists]
+            tmp_wd_index_list = [x[:i+1] for x in wd_index_lists]
+
+            cur_rewards[:, i] = self.get_cov_reward(tmp_wd_index, tmp_wd_index_list, news_body_indexes, news_body_split) * 2
+        
+        diff = np.diff(cur_rewards)
+        rewards = np.concatenate([cur_rewards[:,:1], diff], axis=1)
+        inds = deepcopy(lengths) - 1
+        inds = inds.reshape(-1, 1)
+        end_reward = self.get_per_reward(sequences, lengths, news_body, news_vert, user_embeds) + \
+                        self.get_flu_reward2(sequences, wd_strs)
+        end_reward = end_reward.reshape(-1, 1)
+        rewards[np.arange(rewards.shape[0])[:, None], inds] += end_reward * 0.1
+        
+        return rewards
+
+    def get_per_reward(self, seqs, sample_lengths, news_body, news_vert, user_embeds, sos_id=1, eos_id=2):
+        seqs_new = deepcopy(seqs)
+        for ind,temp_len in enumerate(sample_lengths):
+            if seqs_new[ind, temp_len - 1] == eos_id:
+                seqs_new[ind, temp_len - 1:] = 0
+            else:
+                seqs_new[ind, temp_len:] = 0
 
         with torch.no_grad():
-            news_embeds = self.usermodel.news_encoder([seqs, news_vert, news_body]) # (bz, 64)
+            news_embeds = self.usermodel.news_encoder([seqs_new, news_vert, news_body]) # (bz, 64)
         personalized_r = torch.bmm(news_embeds.unsqueeze(1), user_embeds.unsqueeze(-1))# (bz, 1)
         personalized_r = personalized_r.squeeze(-1).squeeze(-1).detach().cpu().numpy()
+        return np.tanh(personalized_r)
 
-        # flency_r
+    def get_flu_reward(self, seqs, wd_strs):
+        bz = seqs.shape[0]
         fluency_r = np.ones((bz)).astype(np.float32)
         fluency_r = fluency_r*0.5
 
@@ -438,7 +395,9 @@ class Trainer(nn.Module):
         shift_labels = tokenize_input[..., 1:].contiguous()
         for i in range(len(logits)):
             temp = self.lm_criterion(shift_logits[i], shift_labels[i].long()).item()
-            fluency_r[i] = np.tanh(temp/10)
+            # fluency_r[i] = np.tanh(temp/10)
+            fluency_r[i] = temp/10
+
         '''
         TOO SLOW:
         for ind, sen in enumerate(wd_strs):
@@ -448,18 +407,65 @@ class Trainer(nn.Module):
             if not np.isnan(temp_loss):
                 fluency_r[ind] = np.tanh(temp_loss/10)
         '''
+        return fluency_r
+
+    def get_flu_reward2(self, seqs, wd_strs):
+        bz = seqs.shape[0]
+        fluency_r = np.ones((bz)).astype(np.float32)
+        fluency_r = fluency_r*0.2
+
+        tokenize_input = self.lm_tokenizer(wd_strs, padding=True, truncation=True, return_tensors="pt")['input_ids'].to(self.device)
+
+        for ind,wd_str in enumerate(wd_strs):
+            tokenize_input = self.lm_tokenizer(wd_str, return_tensors="pt")['input_ids'].to(self.device)
+            with torch.no_grad():
+                try:
+                    loss = self.lm(tokenize_input, labels=tokenize_input).loss.item()
+                except:
+                    loss = 8.
+                fluency_r[ind] = np.tanh(50/math.exp(loss)) + len(set(wd_str.split())) / len(wd_str.split())
+        return fluency_r/2
+    
+    
+    def get_cov_reward(self,  wd_indexes, wd_index_list, news_body_indexes, news_body_split):
+        if self.mode == 1:
+            cover_r = ROUGE_Score(self.rouge_evaluator, wd_indexes, news_body_indexes)
+            cover_r = cover_r[0] + cover_r[3] + cover_r[5] + cover_r[6] + cover_r[8]
+        elif self.mode == 2:
+            cover_r = ROUGE_Score(self.rouge_evaluator, wd_indexes, news_body_indexes)
+            cover_r = cover_r[0] + cover_r[3] + cover_r[6]
+            penalize_r = np.array([ (1- float(len(wd_lis)) / len(set(wd_lis))) * 0.1 for wd_lis in wd_index_list])
+            cover_r += penalize_r
+        elif self.mode == 3:
+            cover_r = ROUGE_Score(self.rouge_evaluator, wd_indexes, news_body_indexes)
+            cover_r = cover_r[0] + cover_r[3] + cover_r[5] + cover_r[6] + cover_r[8]
+            penalize_r = np.array([ (1- float(len(wd_lis)) / len(set(wd_lis))) * 0.1 for wd_lis in wd_index_list])
+            cover_r += penalize_r
+        elif self.mode == 4:
+            cover_r = ROUGE_Score_TOP3(self.rouge_evaluator, wd_indexes, news_body_indexes, news_body_split)
+            cover_r = cover_r[0] + cover_r[3] + cover_r[5] + cover_r[6] + cover_r[8]
+        elif self.mode == 5:
+            cover_r = ROUGE_Score_TOP3(self.rouge_evaluator, wd_indexes, news_body_indexes, news_body_split)
+            cover_r = cover_r[0] + cover_r[3] + cover_r[5] + cover_r[6] + cover_r[8]
+            penalize_r = np.array([ (1- float(len(wd_lis)) / len(set(wd_lis))) * 0.1 for wd_lis in wd_index_list])
+            cover_r += penalize_r
+
+        return cover_r
+
+
+    def get_single_reward(self, seqs, sample_lengths, wd_strs, wd_indexes, news_body, news_vert, news_body_indexes, user_embeds, sos_id=1, eos_id=2):
+        
+        bz = seqs.shape[0]
+
+        # personalized_r
+        personalized_r = self.get_per_reward(seqs, sample_lengths, news_body, news_vert, user_embeds)
+
+        # flency_r
+        fluency_r = self.get_flu_reward2(seqs, wd_strs)
 
         # cover_r
-        cover_r1, cover_r2 = ROUGE_Score(self.rouge_evaluator, wd_indexes, news_body_indexes)
-        cover_r = (cover_r1 + cover_r2)/2
+        cover_r = self.get_cov_reward(wd_indexes, None, news_body_indexes)
 
-        all_rewards = (personalized_r + 2*fluency_r + 7*cover_r)/10
+        all_rewards = (personalized_r + fluency_r) *0.1 + 5*cover_r
 
         return all_rewards
-
-            
-    
-
-        
-
-    

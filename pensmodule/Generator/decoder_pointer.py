@@ -159,7 +159,7 @@ class Decoder_P(nn.Module):
                 symbols = decode(di, step_output, step_attn)
                 decoder_input = symbols # vocab
                 states[:, di, :] = output.squeeze(1)
-
+        
         return decoder_outputs, decoder_hidden_init, decoder_hidden, sequence_symbols, lengths, states
 
     def _init_state(self, encoder_hidden=None):

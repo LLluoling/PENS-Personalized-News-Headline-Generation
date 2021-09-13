@@ -40,7 +40,7 @@ def predict(usermodel, model, test_iter, device, index2word, beam=True, beam_siz
                     headlines.append(sent_beam_search)
                 preds.extend(headlines)
             else:
-                _, _, _, _, _, wd_strs, _, _ = \
+                _, _, _, _, _, wd_strs, _, _,_,_ = \
                                         model(src, None, None, user_embeds, 0)
                 preds.extend(wd_strs)
         ys.extend(rewrite_titile)
@@ -50,7 +50,7 @@ def predict(usermodel, model, test_iter, device, index2word, beam=True, beam_siz
             modified_pred.append(pred)
         else:
             modified_pred.append('news')
-    rouge_evaluator = rouge.Rouge(metrics=['rouge-1','rouge-2', 'rouge-l'])
+    rouge_evaluator = rouge.Rouge(metrics=['rouge-1', 'rouge-2','rouge-l'])
     
     refs = [_.lower() for _ in ys]
     hyps = [_.lower() for _ in modified_pred]
@@ -58,7 +58,8 @@ def predict(usermodel, model, test_iter, device, index2word, beam=True, beam_siz
     scores1 = np.array([score['rouge-1']['f'] for score in scores])
     scores2 = np.array([score['rouge-2']['f'] for score in scores])
     scoresf = np.array([score['rouge-l']['f'] for score in scores])
-    return scores1, scores2, scoresf
+    return refs, hyps, scores1, scores2, scoresf
+
 
 def load_model_from_ckpt(path):
     checkpoint = torch.load(path)

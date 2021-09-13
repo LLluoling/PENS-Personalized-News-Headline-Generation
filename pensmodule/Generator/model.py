@@ -43,24 +43,25 @@ class HeadlineGen(nn.Module):
                                         encoder_outputs, teacher_forcing_ratio, user_embedding) 
         
         sequences = torch.cat(sequence_symbols,dim=-1)
-        wd_strs, wd_indexes = self.predict(sequences, lengths)
+        wd_strs, wd_indexes, wd_str_lists, wd_index_lists = self.predict(sequences, lengths)
         
-        return encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, states
+        return encoder_outputs, decoder_outputs, decoder_hidden_init, sequences, lengths, wd_strs, wd_indexes, wd_str_lists, wd_index_lists, states
 
         
     def predict(self, sequences, lengths):
-
-        wd_strs, wd_indexes = [], []
+        wd_strs, wd_indexes, wd_str_lists, wd_index_lists = [], [], [], []
         for seq,length in zip(sequences, lengths):
             wd_index = [str(ind.item()) for ind in seq][:length]
             wd_str = [self.index2word[ind.item()] for ind in seq][:length]
-            wd_index = [ind for ind in wd_index if ind !=3 ]
+            wd_index = [ind for ind in wd_index if int(ind) !=self.eos_id ]
             wd_str = [ind for ind in wd_str if ind !='<eos>' ]
+            wd_index_lists.append(wd_index)
+            wd_str_lists.append(wd_str)
             wd_indexes.append(' '.join(wd_index))
             wd_strs.append(' '.join(wd_str))
 
         
-        return wd_strs, wd_indexes
+        return wd_strs, wd_indexes, wd_str_lists, wd_index_lists
         
     
     def batchBLLLoss(self, src, tgt_input=None, tgt_output=None, user_embedding=None, teacher_forcing_ratio=1):
