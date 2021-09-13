@@ -33,6 +33,9 @@ Here we take NRMS as user encoder, the followings are some experiment detailes t
 ![image info](./docs/reward.png)
 
 ### 2. Test performance on different training epoches
+![image info](./docs/rouge1.png)
+![image info](./docs/rouge2.png)
+![image info](./docs/rougel.png)
 
 
 ### 3. Cases
