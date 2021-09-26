@@ -89,16 +89,10 @@ class Trainer(nn.Module):
                                 "checkpoint_{}.pth".format(tag))
         if mkdir:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-        if torch.cuda.device_count() > 1:
-            torch.save(OrderedDict([
-                ('model', self.model.module),
-                ('step', self.step)
-            ]), path)
-        else:
-            torch.save(OrderedDict([
-                ('model', self.model),
-                ('step', self.step)
-            ]), path)
+        torch.save(OrderedDict([
+            ('model', self.model),
+            ('step', self.step)
+        ]), path)
         print("Saved " + path)
         return path
 
