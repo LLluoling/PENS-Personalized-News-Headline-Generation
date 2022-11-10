@@ -41,7 +41,7 @@ class ImpressionDataset(Dataset):
         clicked_rep = self.news_scoring[clicked_news]
         source = self.sources[candidate_news]
         target_input = self.target_inputs[candidate_news]
-        target_output = self.target_inputs[candidate_news]
+        target_output = self.target_outputs[candidate_news]
         
         return candidate_news, clicked_rep, source, target_input, target_output
 
